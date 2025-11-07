@@ -1,6 +1,7 @@
 from pathlib import Path
-from json_parser import to_json_string
+import json
 import os
+from json_parser import atomic_write_json, to_json_string
 
 def filter_by_location(data, *args, **kwargs):
     """
@@ -31,16 +32,27 @@ def filter_by_location(data, *args, **kwargs):
         if loc:
             locations.append(loc)
 
-    # 🧼 Deduplicate location dicts
-    location = [dict(t) for t in {tuple(d.items()) for d in locations}]
+    # 🧼 Deduplicate location dicts robustly using canonical JSON (handles lists)
+    seen = set()
+    unique_locations = []
+    for d in locations:
+        key = json.dumps(d, sort_keys=True, ensure_ascii=False)
+        if key not in seen:
+            seen.add(key)
+            unique_locations.append(d)
 
-    # 📝 Save location keys if not already saved
-    if not FILE_LOCATION.exists():
-        to_json_string(location, location=str(FILE_LOCATION))
+    # Allow callers to override output paths/names via kwargs
+    keys_out = Path(kwargs.get('keys_out', FILE_LOCATION))
+    result_out = Path(kwargs.get('result_out', FILE_LOCATION.parent / 'filtered_by_location.json'))
+    force = bool(kwargs.get('force', False))
+
+    # 📝 Save location keys if not already saved (or if force=True)
+    if force or not keys_out.exists():
+        atomic_write_json(unique_locations, keys_out, indent=2, sort_keys=True)
 
     # 🔁 Match users to each location by UUID only
     result = []
-    for loc in location:
+    for loc in unique_locations:
         matched_uuids = []
         for user in data:
             match = True
@@ -66,5 +78,6 @@ def filter_by_location(data, *args, **kwargs):
         result.append(loc_with_uuids)
 
     # 💾 Save final result
-    to_json_string(result, location=str(FILE_LOCATION.parent / "filtered_by_location.json"))
+    # write result atomically
+    atomic_write_json(result, result_out, indent=2, sort_keys=True)
     return result
